@@ -1,1 +1,14 @@
 // app global css in SCSS form
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+body {
+  font-family: 'Inter', sans-serif;
+}
+
+.text-grey-6 {
+  color: #737373;
+}
+
+.bg-dark {
+  background: #000000;
+}
