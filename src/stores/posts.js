@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import useSupabase from 'boot/supabase'
-import pinia from './index' // default import 사용
+import { useUserStore } from 'stores/user'
+// import pinia from './index' // default import 사용
 
 // store를 직접 export
 export const usePostsStore = defineStore(
@@ -11,85 +12,113 @@ export const usePostsStore = defineStore(
     const posts = ref([])
     const loading = ref(false)
     const error = ref(null)
+    const userStore = useUserStore()
+    let currentFetch = null
 
     async function fetchPosts() {
+      console.log('[PostsStore] Starting to fetch posts...', {
+        loading: loading.value,
+        hasPendingFetch: !!currentFetch,
+      })
+
+      if (currentFetch) {
+        console.log('[PostsStore] Waiting for existing fetch to complete...')
+        const result = await currentFetch
+        return result
+      }
+
+      loading.value = true
+
       try {
-        loading.value = true
+        currentFetch = (async () => {
+          try {
+            console.log('[PostsStore] Fetching posts from Supabase...')
+            const { data: postsData, error } = await supabase
+              .from('posts')
+              .select('*')
+              .order('created_at', { ascending: false })
+              .limit(50)
 
-        // 현재 로그인한 사용자 정보 가져오기
-        const {
-          data: { user },
-        } = await supabase.auth.getUser()
+            if (error) throw error
 
-        // 먼저 posts 데이터를 가져옵니다
-        const { data: postsData, error: postsError } = await supabase
-          .from('posts')
-          .select('*')
-          .order('created_at', { ascending: false })
-
-        if (postsError) throw postsError
-
-        // 각 post의 user_id를 사용하여 profiles 데이터와 likes 데이터를 가져옵니다
-        const postsWithProfilesAndLikes = await Promise.all(
-          postsData.map(async (post) => {
-            const { data: profileData, error: profileError } = await supabase
-              .from('profiles')
-              .select('username, avatar_url, full_name')
-              .eq('id', post.user_id)
-              .single()
-
-            if (profileError) throw profileError
-
-            // 현재 사용자의 좋아요 상태 확인
-            const { data: likeData, error: likeError } = await supabase
-              .from('likes')
-              .select('id')
-              .eq('post_id', post.id)
-              .eq('user_id', user.id)
-              .maybeSingle()
-
-            if (likeError) {
-              console.error('좋아요 상태 확인 오류:', likeError)
-              throw likeError
+            if (!postsData?.length) {
+              console.log('[PostsStore] No posts found')
+              await Promise.resolve()
+              posts.value = []
+              return []
             }
 
-            return {
-              ...post,
-              profiles: profileData,
-              liked: !!likeData,
-              isLikeLoading: false,
-            }
-          }),
-        )
+            console.log('[PostsStore] Found posts:', postsData.length)
+            console.log('[PostsStore] Fetching additional data for posts...')
 
-        // 각 post의 카운트 정보도 가져옵니다
-        const postsWithAll = await Promise.all(
-          postsWithProfilesAndLikes.map(async (post) => {
-            const counts = await fetchPostCounts(post.id)
-            return {
-              ...post,
-              commentCount: counts.commentCount,
-              likeCount: counts.likeCount,
-            }
-          }),
-        )
+            const postsWithCounts = await Promise.all(
+              postsData.map(async (post) => {
+                const [{ data: profileData }, likesData, commentsData, likeStatus] =
+                  await Promise.all([
+                    supabase
+                      .from('profiles')
+                      .select('id, username, full_name, avatar_url')
+                      .eq('id', post.user_id)
+                      .single(),
+                    supabase
+                      .from('likes')
+                      .select('*', { count: 'exact', head: true })
+                      .eq('post_id', post.id),
+                    supabase
+                      .from('comments')
+                      .select('*', { count: 'exact', head: true })
+                      .eq('post_id', post.id),
+                    supabase
+                      .from('likes')
+                      .select('id')
+                      .eq('post_id', post.id)
+                      .eq('user_id', userStore.user?.id)
+                      .maybeSingle(),
+                  ])
 
-        posts.value = postsWithAll
-      } catch (err) {
-        error.value = err.message
-        console.error('Error fetching posts:', err)
+                return {
+                  ...post,
+                  profiles: profileData,
+                  likeCount: likesData.count || 0,
+                  commentCount: commentsData.count || 0,
+                  liked: !!likeStatus.data,
+                }
+              }),
+            )
+
+            console.log('[PostsStore] Successfully processed all posts data')
+            await Promise.resolve()
+            posts.value = postsWithCounts
+            return postsWithCounts
+          } catch (err) {
+            console.error('[PostsStore] Error in fetchPosts:', err)
+            await Promise.resolve()
+            posts.value = []
+            throw err
+          }
+        })()
+
+        const result = await currentFetch
+        return result
       } finally {
         loading.value = false
+        currentFetch = null
+        console.log('[PostsStore] Posts fetch completed. States reset.')
       }
     }
 
     async function createPost({ content, imageFile }) {
+      console.log('[PostsStore] Starting to create post...', {
+        hasImage: !!imageFile,
+      })
+      loading.value = true
+
       try {
-        loading.value = true
         let imageUrl = null
 
         // 이미지가 있는 경우 업로드
         if (imageFile) {
+          console.log('[PostsStore] Uploading image...')
           const fileExt = imageFile.name.split('.').pop()
           const fileName = `${Math.random()}.${fileExt}`
           const filePath = `${Date.now()}_${fileName}`
@@ -98,36 +127,206 @@ export const usePostsStore = defineStore(
             .from('post-images')
             .upload(filePath, imageFile)
 
-          if (uploadError) throw uploadError
+          if (uploadError) {
+            console.error('[PostsStore] Image upload error:', uploadError)
+            throw uploadError
+          }
 
           const {
             data: { publicUrl },
           } = supabase.storage.from('post-images').getPublicUrl(filePath)
 
           imageUrl = publicUrl
+          console.log('[PostsStore] Image uploaded successfully:', imageUrl)
         }
 
         // 포스트 생성
-        const {
-          data: { user },
-        } = await supabase.auth.getUser()
-        const { data, error: err } = await supabase
+        console.log('[PostsStore] Creating post in database...')
+        const { data: newPost, error } = await supabase
           .from('posts')
-          .insert({
-            content,
-            image_url: imageUrl,
-            user_id: user.id,
-          })
+          .insert([
+            {
+              content,
+              image_url: imageUrl,
+              user_id: userStore.user.id,
+            },
+          ])
           .select()
           .single()
 
-        if (err) throw err
-        return data
+        if (error) {
+          console.error('[PostsStore] Post creation error:', error)
+          throw error
+        }
+        console.log('[PostsStore] Post created successfully:', newPost)
+
+        // 새 게시물에 필요한 추가 데이터 가져오기
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('id, username, full_name, avatar_url')
+          .eq('id', newPost.user_id)
+          .single()
+
+        const fullPost = {
+          ...newPost,
+          profiles: profileData,
+          likeCount: 0,
+          commentCount: 0,
+          liked: false,
+        }
+
+        await Promise.resolve()
+        posts.value = [fullPost, ...posts.value]
+        console.log('[PostsStore] Post added to state')
+        return fullPost
       } catch (err) {
-        error.value = err.message
+        console.error('[PostsStore] Error creating post:', err)
         throw err
       } finally {
         loading.value = false
+        console.log('[PostsStore] Create post completed')
+      }
+    }
+
+    async function updatePost({ postId, content, imageFile, removeImage }) {
+      console.log('[PostsStore] Starting to update post...', {
+        postId,
+        hasNewImage: !!imageFile,
+        removeImage,
+      })
+      loading.value = true
+
+      try {
+        const postIndex = posts.value.findIndex((p) => p.id === postId)
+        if (postIndex === -1) throw new Error('게시물을 찾을 수 없습니다.')
+
+        let imageUrl = posts.value[postIndex].image_url
+
+        // 이미지 처리
+        if (removeImage) {
+          // 기존 이미지 삭제
+          if (imageUrl) {
+            console.log('[PostsStore] Removing existing image...')
+            const oldFilePath = imageUrl.split('/').pop()
+            const { error: deleteError } = await supabase.storage
+              .from('post-images')
+              .remove([oldFilePath])
+
+            if (deleteError) {
+              console.error('[PostsStore] Error removing old image:', deleteError)
+            }
+          }
+          imageUrl = null
+        } else if (imageFile) {
+          // 새 이미지 업로드
+          console.log('[PostsStore] Uploading new image...')
+          const fileExt = imageFile.name.split('.').pop()
+          const fileName = `${Math.random()}.${fileExt}`
+          const filePath = `${Date.now()}_${fileName}`
+
+          // 기존 이미지가 있다면 삭제
+          if (imageUrl) {
+            const oldFilePath = imageUrl.split('/').pop()
+            await supabase.storage.from('post-images').remove([oldFilePath])
+          }
+
+          const { error: uploadError } = await supabase.storage
+            .from('post-images')
+            .upload(filePath, imageFile)
+
+          if (uploadError) {
+            console.error('[PostsStore] Image upload error:', uploadError)
+            throw uploadError
+          }
+
+          const {
+            data: { publicUrl },
+          } = supabase.storage.from('post-images').getPublicUrl(filePath)
+
+          imageUrl = publicUrl
+          console.log('[PostsStore] New image uploaded successfully:', imageUrl)
+        }
+
+        // 게시물 업데이트
+        console.log('[PostsStore] Updating post in database...')
+        const { data: updatedPost, error } = await supabase
+          .from('posts')
+          .update({
+            content,
+            image_url: imageUrl,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', postId)
+          .select()
+          .single()
+
+        if (error) {
+          console.error('[PostsStore] Post update error:', error)
+          throw error
+        }
+
+        // 업데이트된 게시물 상태 반영
+        const updatedFullPost = {
+          ...updatedPost,
+          profiles: posts.value[postIndex].profiles,
+          likeCount: posts.value[postIndex].likeCount,
+          commentCount: posts.value[postIndex].commentCount,
+          liked: posts.value[postIndex].liked,
+        }
+
+        await Promise.resolve()
+        posts.value[postIndex] = updatedFullPost
+        console.log('[PostsStore] Post updated successfully')
+        return updatedFullPost
+      } catch (err) {
+        console.error('[PostsStore] Error updating post:', err)
+        throw err
+      } finally {
+        loading.value = false
+        console.log('[PostsStore] Update post completed')
+      }
+    }
+
+    async function deletePost(postId) {
+      console.log('[PostsStore] Starting to delete post...', { postId })
+      loading.value = true
+
+      try {
+        const post = posts.value.find((p) => p.id === postId)
+        if (!post) throw new Error('게시물을 찾을 수 없습니다.')
+
+        // 이미지가 있다면 먼저 삭제
+        if (post.image_url) {
+          console.log('[PostsStore] Removing post image...')
+          const filePath = post.image_url.split('/').pop()
+          const { error: deleteImageError } = await supabase.storage
+            .from('post-images')
+            .remove([filePath])
+
+          if (deleteImageError) {
+            console.error('[PostsStore] Error removing image:', deleteImageError)
+          }
+        }
+
+        // 게시물 삭제
+        console.log('[PostsStore] Deleting post from database...')
+        const { error } = await supabase.from('posts').delete().eq('id', postId)
+
+        if (error) {
+          console.error('[PostsStore] Post deletion error:', error)
+          throw error
+        }
+
+        // 상태에서 게시물 제거
+        await Promise.resolve()
+        posts.value = posts.value.filter((p) => p.id !== postId)
+        console.log('[PostsStore] Post deleted successfully')
+      } catch (err) {
+        console.error('[PostsStore] Error deleting post:', err)
+        throw err
+      } finally {
+        loading.value = false
+        console.log('[PostsStore] Delete post completed')
       }
     }
 
@@ -451,6 +650,8 @@ export const usePostsStore = defineStore(
       error,
       fetchPosts,
       createPost,
+      updatePost,
+      deletePost,
       toggleLike,
       fetchComments,
       addComment,
@@ -459,5 +660,9 @@ export const usePostsStore = defineStore(
       addReply,
     }
   },
-  { store: pinia }, // getPinia() 대신 pinia 직접 사용
+  {
+    persist: {
+      paths: ['posts'],
+    },
+  },
 )

@@ -15,19 +15,19 @@
     </q-tabs>
 
     <!-- 로딩 표시 -->
-    <div v-if="loading" class="text-center q-pa-md">
+    <div v-if="activityStore.loading" class="text-center q-pa-md">
       <q-spinner color="primary" size="2em" />
     </div>
 
     <!-- 인기 게시물 목록 -->
     <div v-else-if="activeTab === 'trending'">
-      <div v-if="trendingPosts.length === 0" class="text-center text-grey q-pa-lg">
+      <div v-if="activityStore.trendingPosts.length === 0" class="text-center text-grey q-pa-lg">
         인기 게시물이 없습니다.
       </div>
 
       <post-card
         v-else
-        v-for="post in trendingPosts"
+        v-for="post in activityStore.trendingPosts"
         :key="post.id"
         :post="post"
         class="q-mb-md"
@@ -77,13 +77,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, onActivated, onDeactivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from 'stores/user'
 import useSupabase from 'boot/supabase'
 import { useQuasar } from 'quasar'
 import PostCard from 'components/PostCard.vue'
 import CommentDialog from 'components/CommentDialog.vue'
+import { useActivityStore } from 'stores/activity'
 
 const { supabase } = useSupabase()
 const userStore = useUserStore()
@@ -93,9 +94,10 @@ const $q = useQuasar()
 const activeTab = ref('trending')
 const loading = ref(false)
 const users = ref([])
-const trendingPosts = ref([])
 const showComments = ref(false)
 const selectedPost = ref(null)
+
+const activityStore = useActivityStore()
 
 // 팔로워/팔로잉 목록 로드
 async function loadUsers() {
@@ -155,68 +157,13 @@ async function loadUsers() {
 
 // 인기 게시물 로드 (좋아요 수 기준)
 async function loadTrendingPosts() {
-  if (loading.value) return
-
-  loading.value = true
   try {
-    // 먼저 모든 게시물 가져오기
-    const { data: posts } = await supabase
-      .from('posts')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(100)
-
-    if (!posts?.length) {
-      trendingPosts.value = []
-      return
-    }
-
-    // 각 게시물의 프로필, 좋아요, 댓글 수 계산
-    const postsWithCounts = await Promise.all(
-      posts.map(async (post) => {
-        // 프로필 정보 가져오기
-        const { data: profileData } = await supabase
-          .from('profiles')
-          .select('id, username, full_name, avatar_url')
-          .eq('id', post.user_id)
-          .single()
-
-        // 좋아요 수와 댓글 수를 한 번에 가져오기
-        const [{ count: likeCount }, { count: commentCount }, { data: likeData }] =
-          await Promise.all([
-            supabase
-              .from('likes')
-              .select('*', { count: 'exact', head: true })
-              .eq('post_id', post.id),
-            supabase
-              .from('comments')
-              .select('*', { count: 'exact', head: true })
-              .eq('post_id', post.id),
-            supabase
-              .from('likes')
-              .select('id')
-              .eq('post_id', post.id)
-              .eq('user_id', userStore.user?.id)
-              .maybeSingle(),
-          ])
-
-        return {
-          ...post,
-          profiles: profileData,
-          likeCount: likeCount || 0,
-          commentCount: commentCount || 0,
-          liked: !!likeData,
-        }
-      }),
-    )
-
-    // 좋아요 수로 정렬하고 상위 20개만 선택
-    trendingPosts.value = postsWithCounts.sort((a, b) => b.likeCount - a.likeCount).slice(0, 20)
+    await activityStore.fetchTrendingPosts()
   } catch (err) {
-    console.error('Error loading trending posts:', err)
-    trendingPosts.value = []
-  } finally {
-    loading.value = false
+    $q.notify({
+      type: 'negative',
+      message: err.message || '데이터를 불러오는데 실패했습니다.',
+    })
   }
 }
 
@@ -264,8 +211,9 @@ function copyPostLink(post) {
 }
 
 // 탭 변경 시 데이터 로드
-watch(activeTab, () => {
-  if (['followers', 'following'].includes(activeTab.value)) {
+watch(activeTab, (newTab, oldTab) => {
+  console.log('[ActivityPage] Tab changed', { newTab, oldTab })
+  if (['followers', 'following'].includes(newTab)) {
     loadUsers()
   } else {
     loadTrendingPosts()
@@ -274,6 +222,31 @@ watch(activeTab, () => {
 
 // 컴포넌트 마운트 시 인기 게시물 먼저 로드
 onMounted(() => {
+  console.log('[ActivityPage] Component mounted')
   loadTrendingPosts()
+})
+
+// 컴포넌트가 다시 활성화될 때 데이터 새로고침
+onActivated(() => {
+  console.log('[ActivityPage] Component activated', {
+    activeTab: activeTab.value,
+    loading: loading.value,
+  })
+
+  if (activeTab.value === 'trending') {
+    loadTrendingPosts()
+  } else {
+    loadUsers()
+  }
+})
+
+// 컴포넌트가 비활성화될 때 상태 초기화
+onDeactivated(() => {
+  console.log('[ActivityPage] Component deactivated')
+  loading.value = false
+})
+
+defineExpose({
+  loadTrendingPosts,
 })
 </script>

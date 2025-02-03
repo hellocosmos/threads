@@ -30,6 +30,11 @@ const routes = [
         path: 'activity',
         component: () => import('pages/ActivityPage.vue'),
       },
+      {
+        path: '/post/edit/:id',
+        component: () => import('pages/CreatePostPage.vue'),
+        props: true,
+      },
     ],
   },
   {

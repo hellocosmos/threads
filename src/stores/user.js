@@ -330,4 +330,9 @@ export const useUserStore = defineStore(
     }
   },
   { store: getPinia() },
+  {
+    persist: {
+      paths: ['user', 'profile'],
+    },
+  },
 )

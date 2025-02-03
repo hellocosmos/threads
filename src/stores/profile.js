@@ -3,31 +3,73 @@ import { ref } from 'vue'
 import useSupabase from 'boot/supabase'
 import { pinia } from 'boot/pinia'
 
+const { supabase } = useSupabase()
+
 export const useProfileStore = defineStore(
   'profile',
   () => {
-    const { supabase } = useSupabase()
-    const profile = ref(null)
     const loading = ref(false)
+    const profile = ref(null)
     const error = ref(null)
+    let currentFetch = null // 현재 진행 중인 fetch Promise를 추적
 
     async function fetchProfile(userId) {
-      try {
-        loading.value = true
-        const { data, error: err } = await supabase
-          .from('profiles')
-          .select('id, username, full_name, avatar_url, bio')
-          .eq('id', userId)
-          .maybeSingle()
+      console.log('[ProfileStore] Starting to fetch profile...', {
+        userId,
+        loading: loading.value,
+        hasPendingFetch: !!currentFetch,
+      })
 
-        if (err) throw err
-        profile.value = data
-      } catch (err) {
-        error.value = err.message
-        console.error('Error fetching profile:', err)
+      // 이미 진행 중인 요청이 있다면 그 결과를 기다림
+      if (currentFetch) {
+        console.log('[ProfileStore] Waiting for existing fetch to complete...')
+        const result = await currentFetch
+        return result
+      }
+
+      loading.value = true
+      error.value = null
+
+      try {
+        currentFetch = (async () => {
+          try {
+            console.log('[ProfileStore] Fetching profile data from Supabase...')
+            const { data, error: profileError } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', userId)
+              .single()
+
+            if (profileError) {
+              console.error('[ProfileStore] Error fetching profile:', profileError)
+              throw profileError
+            }
+
+            console.log('[ProfileStore] Profile data received:', data)
+            await Promise.resolve() // 상태 업데이트를 다음 tick으로 미룸
+            profile.value = data
+            return data
+          } catch (err) {
+            console.error('[ProfileStore] Error in fetchProfile:', err)
+            error.value = err.message
+            throw err
+          }
+        })()
+
+        const result = await currentFetch
+        return result
       } finally {
         loading.value = false
+        currentFetch = null
+        console.log('[ProfileStore] Profile fetch completed. States reset.')
       }
+    }
+
+    function clearProfile() {
+      console.log('[ProfileStore] Clearing profile data')
+      profile.value = null
+      error.value = null
+      loading.value = false
     }
 
     async function updateProfile({ fullName, username, bio, avatarUrl }) {
@@ -82,13 +124,19 @@ export const useProfileStore = defineStore(
     }
 
     return {
-      profile,
       loading,
+      profile,
       error,
       fetchProfile,
+      clearProfile,
       updateProfile,
       uploadAvatar,
     }
   },
-  { store: pinia },
+  {
+    persist: {
+      paths: ['profile'],
+    },
+    store: pinia,
+  },
 )

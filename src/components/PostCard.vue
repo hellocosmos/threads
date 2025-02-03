@@ -38,6 +38,35 @@
       </q-card-section>
     </div>
 
+    <!-- 작성자인 경우에만 수정/삭제 메뉴 표시 -->
+    <q-card-section v-if="isAuthor" class="absolute-top-right q-pa-md">
+      <q-btn flat dense round color="grey-6" size="md" icon="more_horiz">
+        <q-menu anchor="bottom right" self="top right">
+          <q-list style="min-width: 150px" class="text-grey-8">
+            <q-item clickable v-close-popup @click="handleEdit" class="q-px-lg q-py-md">
+              <q-item-section>
+                <div class="row items-center">
+                  <q-icon name="edit" size="20px" class="q-mr-md" />
+                  <span class="text-body1">수정하기</span>
+                </div>
+              </q-item-section>
+            </q-item>
+
+            <q-separator />
+
+            <q-item clickable v-close-popup @click="confirmDelete" class="q-px-lg q-py-md">
+              <q-item-section>
+                <div class="row items-center text-negative">
+                  <q-icon name="delete" size="20px" class="q-mr-md" />
+                  <span class="text-body1">삭제하기</span>
+                </div>
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-menu>
+      </q-btn>
+    </q-card-section>
+
     <!-- 액션 버튼들 -->
     <q-card-actions align="around" class="q-px-md">
       <q-btn
@@ -150,7 +179,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { usePostsStore } from 'stores/posts'
 import { useUserStore } from 'stores/user'
 import { useQuasar } from 'quasar'
@@ -176,6 +205,11 @@ const followLoading = ref(false)
 const followCounts = ref({
   followersCount: 0,
   followingCount: 0,
+})
+
+// 작성자 여부 확인 - 다시 추가
+const isAuthor = computed(() => {
+  return props.post.user_id === userStore.user?.id
 })
 
 // 모달이 열릴 때 팔로우 상태와 카운트 로드
@@ -285,11 +319,39 @@ function handleCardClick(evt) {
   evt.stopPropagation()
   router.push(`/post/${props.post.id}`)
 }
+
+// 수정/삭제 함수들 다시 추가
+function handleEdit() {
+  router.push(`/post/edit/${props.post.id}`)
+}
+
+function confirmDelete() {
+  $q.dialog({
+    title: '게시물 삭제',
+    message: '정말 이 게시물을 삭제하시겠습니까?',
+    cancel: true,
+    persistent: true,
+  }).onOk(async () => {
+    try {
+      await postsStore.deletePost(props.post.id)
+      $q.notify({
+        type: 'positive',
+        message: '게시물이 삭제되었습니다.',
+      })
+    } catch (err) {
+      $q.notify({
+        type: 'negative',
+        message: err.message || '게시물 삭제에 실패했습니다.',
+      })
+    }
+  })
+}
 </script>
 
 <style lang="scss" scoped>
 .q-card {
-  touch-action: pan-y; /* 수직 스크롤만 허용 */
+  position: relative;
+  touch-action: pan-y;
   .q-img {
     &.cursor-pointer {
       transition: opacity 0.3s;
@@ -309,6 +371,27 @@ function handleCardClick(evt) {
       text-align: left;
     }
   }
+
+  // 수정/삭제 버튼 스타일 개선
+  .absolute-top-right {
+    padding: 16px;
+    min-height: 48px;
+    min-width: 48px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+
+    .q-btn {
+      opacity: 0.6;
+      transition: all 0.2s ease;
+      padding: 8px;
+
+      &:hover {
+        opacity: 1;
+        background: rgba(0, 0, 0, 0.05);
+      }
+    }
+  }
 }
 
 .profile-modal {
@@ -324,5 +407,32 @@ function handleCardClick(evt) {
   &:hover {
     background-color: rgba(0, 0, 0, 0.03);
   }
+}
+
+// 메뉴 아이템 호버 효과 개선
+:deep(.q-item) {
+  min-height: 48px;
+  transition: all 0.2s ease;
+  border-radius: 8px;
+  margin: 4px;
+
+  &:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+  }
+
+  .q-icon {
+    opacity: 0.8;
+  }
+
+  &:hover .q-icon {
+    opacity: 1;
+  }
+}
+
+// 메뉴 스타일 개선
+:deep(.q-menu) {
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  padding: 4px;
 }
 </style>

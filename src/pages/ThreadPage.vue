@@ -1,11 +1,13 @@
 <template>
   <q-page class="q-pa-md">
     <!-- 상단 헤더 -->
-    <div class="row items-center q-mb-md">
-      <q-btn flat round icon="arrow_back" color="grey" @click="$router.back()" class="q-mr-sm">
-        <q-tooltip>뒤로가기</q-tooltip>
-      </q-btn>
-      <div class="text-h6">스레드</div>
+    <div class="row items-center justify-between q-mb-md">
+      <div class="row items-center">
+        <q-btn flat round icon="arrow_back" @click="router.back()" class="q-mr-sm">
+          <q-tooltip>돌아가기</q-tooltip>
+        </q-btn>
+        <div class="text-h5">스레드</div>
+      </div>
     </div>
 
     <!-- 원본 게시물 -->

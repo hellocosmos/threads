@@ -202,7 +202,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, onActivated, onDeactivated } from 'vue'
 import { useProfileStore } from 'stores/profile'
 import { useUserStore } from 'stores/user'
 import { useRoute } from 'vue-router'
@@ -246,20 +246,35 @@ const followCounts = ref({
 })
 
 onMounted(async () => {
-  const userId = route.params.id || userStore.user?.id
-  if (userId) {
-    await profileStore.fetchProfile(userId)
-    if (profileStore.profile) {
-      editForm.value = {
-        fullName: profileStore.profile.full_name,
-        username: profileStore.profile.username,
-        bio: profileStore.profile.bio,
+  console.log('[ProfilePage] Component mounted')
+  try {
+    const userId = route.params.id || userStore.user?.id
+    if (userId) {
+      const profileData = await profileStore.fetchProfile(userId)
+      if (profileData) {
+        await Promise.resolve() // 상태 업데이트를 다음 tick으로 미룸
+        editForm.value = {
+          fullName: profileData.full_name,
+          username: profileData.username,
+          bio: profileData.bio,
+        }
       }
     }
-  }
 
+    await loadProfile()
+    await loadUserContent()
+  } catch (err) {
+    console.error('[ProfilePage] Error in onMounted:', err)
+  }
+})
+
+onActivated(async () => {
+  console.log('[ProfilePage] Component activated')
   await loadProfile()
-  await loadUserContent()
+})
+
+onDeactivated(() => {
+  console.log('[ProfilePage] Component deactivated')
 })
 
 function openEditDialog() {
@@ -283,13 +298,38 @@ async function saveProfile() {
 }
 
 async function loadProfile() {
+  console.log('[ProfilePage] Starting to load profile data...')
   try {
     const userId = route.params.id || userStore.user?.id
-    if (!userId) return
+    console.log('[ProfilePage] Loading profile for user:', userId)
 
-    followCounts.value = await userStore.fetchFollowCounts(userId)
+    if (!userId) {
+      console.warn('[ProfilePage] No user ID available')
+      return
+    }
+
+    const profileData = await profileStore.fetchProfile(userId)
+    console.log('[ProfilePage] Profile loaded successfully:', profileData)
+
+    if (profileData) {
+      await Promise.resolve() // 상태 업데이트를 다음 tick으로 미룸
+      editForm.value = {
+        fullName: profileData.full_name,
+        username: profileData.username,
+        bio: profileData.bio,
+      }
+    }
+
+    const counts = await userStore.fetchFollowCounts(userId)
+    await Promise.resolve() // 상태 업데이트를 다음 tick으로 미룸
+    followCounts.value = counts
+    console.log('[ProfilePage] Follow counts loaded:', followCounts.value)
   } catch (err) {
-    console.error('Error loading profile:', err)
+    console.error('[ProfilePage] Error loading profile:', err)
+    $q.notify({
+      type: 'negative',
+      message: '프로필을 불러오는데 실패했습니다.',
+    })
   }
 }
 

@@ -97,25 +97,23 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onDeactivated, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import useSupabase from 'boot/supabase'
-import { useUserStore } from 'stores/user'
+import { useSearchStore } from 'stores/search'
 import PostCard from 'components/PostCard.vue'
 import CommentDialog from 'components/CommentDialog.vue'
 import { useQuasar } from 'quasar'
 
-const { supabase } = useSupabase()
 const router = useRouter()
 const route = useRoute()
-const userStore = useUserStore()
 const $q = useQuasar()
+const searchStore = useSearchStore()
 
 const searchQuery = ref('')
 const activeTab = ref('posts')
-const loading = ref(false)
-const posts = ref([])
-const users = ref([])
+const loading = computed(() => searchStore.loading)
+const posts = computed(() => searchStore.posts)
+const users = computed(() => searchStore.users)
 const showComments = ref(false)
 const selectedPost = ref(null)
 
@@ -130,6 +128,10 @@ watch(
 
 // 컴포넌트 마운트 시 URL에 검색어가 있으면 검색 실행
 onMounted(() => {
+  console.log('[SearchPage] Component mounted', {
+    query: route.query.q,
+    tab: route.query.tab,
+  })
   if (route.query.q?.trim()) {
     searchQuery.value = route.query.q
     activeTab.value = route.query.tab || 'posts'
@@ -137,125 +139,33 @@ onMounted(() => {
   }
 })
 
+// 검색어가 비워질 때 결과를 리셋하도록 watch 추가
+watch(searchQuery, (newValue) => {
+  if (!newValue.trim()) {
+    searchStore.clearResults()
+  }
+})
+
+// 탭이 변경될 때도 결과를 리셋
+watch(activeTab, () => {
+  searchStore.clearResults()
+})
+
 // 검색 실행
 async function handleSearch() {
   if (!searchQuery.value.trim()) return
 
-  loading.value = true
   try {
-    // URL 업데이트
-    router.push({
-      query: {
-        q: searchQuery.value,
-        tab: activeTab.value,
-      },
-    })
-
     if (activeTab.value === 'posts') {
-      await searchPosts()
+      await searchStore.searchPosts(searchQuery.value)
     } else {
-      await searchUsers()
+      await searchStore.searchUsers(searchQuery.value)
     }
   } catch (err) {
-    console.error('Search error:', err)
     $q.notify({
       type: 'negative',
-      message: '검색 중 오류가 발생했습니다.',
+      message: err.message || '검색 중 오류가 발생했습니다.',
     })
-  } finally {
-    loading.value = false
-  }
-}
-
-// 게시물 검색
-async function searchPosts() {
-  try {
-    // 검색어가 없으면 검색하지 않음
-    if (!searchQuery.value.trim()) {
-      posts.value = []
-      return
-    }
-
-    // 게시물 검색
-    const { data: postsData, error: postsError } = await supabase
-      .from('posts')
-      .select('*')
-      .ilike('content', `%${searchQuery.value}%`)
-      .order('created_at', { ascending: false })
-
-    if (postsError) throw postsError
-
-    // 각 게시물의 프로필, 좋아요, 댓글 수 가져오기
-    const postsWithCounts = await Promise.all(
-      (postsData || []).map(async (post) => {
-        // 프로필 정보 가져오기
-        const { data: profileData } = await supabase
-          .from('profiles')
-          .select('id, username, full_name, avatar_url')
-          .eq('id', post.user_id)
-          .single()
-
-        // 좋아요와 댓글 수 가져오기
-        const [{ count: likeCount }, { count: commentCount }, { data: likeData }] =
-          await Promise.all([
-            supabase
-              .from('likes')
-              .select('id', { count: 'exact', head: true })
-              .eq('post_id', post.id),
-            supabase
-              .from('comments')
-              .select('id', { count: 'exact', head: true })
-              .eq('post_id', post.id),
-            supabase
-              .from('likes')
-              .select('id')
-              .eq('post_id', post.id)
-              .eq('user_id', userStore.user?.id)
-              .maybeSingle(),
-          ])
-
-        return {
-          ...post,
-          profiles: profileData,
-          likeCount: likeCount || 0,
-          commentCount: commentCount || 0,
-          liked: !!likeData,
-        }
-      }),
-    )
-
-    posts.value = postsWithCounts
-  } catch (err) {
-    console.error('Error searching posts:', err)
-    $q.notify({
-      type: 'negative',
-      message: '게시물 검색 중 오류가 발생했습니다.',
-    })
-    posts.value = []
-  }
-}
-
-// 사용자 검색도 개선
-async function searchUsers() {
-  try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('id, username, full_name, avatar_url')
-      .or(`username.ilike.%${searchQuery.value}%,full_name.ilike.%${searchQuery.value}%`)
-      .order('username')
-
-    if (error) {
-      throw error
-    }
-
-    users.value = data || []
-  } catch (err) {
-    console.error('Error searching users:', err)
-    $q.notify({
-      type: 'negative',
-      message: '사용자 검색 중 오류가 발생했습니다.',
-    })
-    users.value = []
   }
 }
 
@@ -276,4 +186,16 @@ function copyPostLink(post) {
     message: '링크가 복사되었습니다.',
   })
 }
+
+// 컴포넌트가 비활성화될 때 검색 상태 초기화
+onDeactivated(() => {
+  console.log('[SearchPage] Component deactivated')
+  searchStore.clearResults()
+  searchQuery.value = ''
+  activeTab.value = 'posts'
+})
+
+defineExpose({
+  handleSearch,
+})
 </script>
